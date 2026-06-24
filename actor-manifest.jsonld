@@ -1,0 +1,280 @@
+{
+  "@context": "https://etzhayyim.com/ns/actor/v1",
+  "@id": "did:web:oil-upstream.etzhayyim.com",
+  "actors": [
+    {
+      "description": "Major producing basin coverage.",
+      "displayName": "Basin Registry",
+      "path": "registry:basin"
+    },
+    {
+      "description": "Producing field and block coverage.",
+      "displayName": "Field Registry",
+      "path": "registry:field"
+    },
+    {
+      "description": "Operator and NOC/IOC ownership coverage.",
+      "displayName": "Operator Mapping",
+      "path": "operators:ownership"
+    },
+    {
+      "description": "Production, reserves and disruption pressure coverage.",
+      "displayName": "Production Pressure",
+      "path": "analytics:production-pressure"
+    }
+  ],
+  "capabilities": [
+    "graph.query",
+    "graph.write",
+    "agent.chat",
+    "agent.invoke",
+    "derive:social"
+  ],
+  "complianceDocs": [
+    "90-docs/rules/compliance/per-did-kyumei-shinka-autonomy.md",
+    "90-docs/platform/260403-live-data-kyumei-shinka-consolidated.md"
+  ],
+  "convoSystemPrompt": "You are the Oil Upstream agent. Track basins, fields, operators, reserves and production pressure. Explain how upstream supply concentration and disruptions propagate into midstream, refining and shipping systems.",
+  "description": "Basin, block, field and production system coverage across crude reserves, output pressure and operator ownership.",
+  "displayName": "Oil Upstream Basin & Field Intelligence",
+  "domainKnowledgeRequired": true,
+  "runtime": "k8s-langserver",
+  "edge": "sveltekit-proxy",
+  "legacyExecutionTier": "T1",
+  "governance": {
+    "classification": "internal",
+    "complianceFrameworks": [
+      "SEC Reserves Reporting",
+      "SPE PRMS",
+      "OGMP 2.0"
+    ],
+    "raci": "responsible"
+  },
+  "heartbeatRequired": true,
+  "name": "oil-upstream",
+  "nanoid": "01lupstr",
+  "performerType": "service",
+  "pipelines": [
+    {
+      "steps": [
+        {
+          "args": {
+            "sql": "MATCH (f:OilField) RETURN f.country_code AS country, count(f) AS count, sum(f.production_bpd) AS production ORDER BY production DESC LIMIT 20"
+          },
+          "fn": "graph.query",
+          "id": "fieldStats"
+        },
+        {
+          "args": {
+            "sql": "MATCH (b:OilBasin) RETURN b.country_code AS country, count(b) AS count LIMIT 20"
+          },
+          "depends_on": [],
+          "fn": "graph.query",
+          "id": "basinStats"
+        },
+        {
+          "args": {
+            "sql": "MATCH (c:OilCompany)-[:operates]->(f:OilField) RETURN c.hq_country AS hqCountry, count(f) AS fieldCount LIMIT 20"
+          },
+          "depends_on": [],
+          "fn": "graph.query",
+          "id": "operatorStats"
+        },
+        {
+          "args": {
+            "message": "Oil upstream report.\n\nField stats:\n$fieldStats.rows\n\nBasin stats:\n$basinStats.rows\n\nOperator stats:\n$operatorStats.rows\n\nSummarize upstream concentration, operator exposure and the largest production-side supply risks."
+          },
+          "depends_on": [
+            "fieldStats",
+            "basinStats",
+            "operatorStats"
+          ],
+          "fn": "agent.chat",
+          "id": "analyze"
+        },
+        {
+          "args": {
+            "template": "Oil upstream report: $analyze.text"
+          },
+          "fn": "derive:social",
+          "id": "announce"
+        }
+      ],
+      "trigger": {
+        "cron": "0 */8 * * *",
+        "type": "cron"
+      }
+    },
+    {
+      "steps": [
+        {
+          "args": {
+            "sql": "MATCH (f:OilField)-[e:feeds]->() WHERE e.stream = $input.record.stream RETURN f.field_code AS fieldCode, f.country_code AS country, f.production_bpd AS production LIMIT 20"
+          },
+          "fn": "graph.query",
+          "id": "matchFeedSources"
+        }
+      ],
+      "trigger": {
+        "collections": [
+          "com.etzhayyim.apps.oilMidstream.flow"
+        ],
+        "type": "subscribeRepos"
+      }
+    },
+    {
+      "steps": [
+        {
+          "args": {
+            "sql": "MATCH (f:OilField {field_code: $input.fieldCode}) RETURN f.vertex_id, f.repo, f.collection, f.status LIMIT 1"
+          },
+          "fn": "graph.query",
+          "id": "field"
+        }
+      ],
+      "trigger": {
+        "nsid": "com.etzhayyim.apps.oilUpstream.registry.getField",
+        "type": "xrpc"
+      }
+    },
+    {
+      "steps": [
+        {
+          "args": {
+            "sql": "MATCH (f:OilField) RETURN f.vertex_id, f.repo, f.collection, f.status LIMIT 50"
+          },
+          "fn": "graph.query",
+          "id": "fields"
+        }
+      ],
+      "trigger": {
+        "nsid": "com.etzhayyim.apps.oilUpstream.registry.listFields",
+        "type": "xrpc"
+      }
+    },
+    {
+      "steps": [
+        {
+          "args": {
+            "sql": "MATCH (b:OilBasin) RETURN b.vertex_id, b.repo, b.collection, b.status LIMIT 50"
+          },
+          "fn": "graph.query",
+          "id": "basins"
+        }
+      ],
+      "trigger": {
+        "nsid": "com.etzhayyim.apps.oilUpstream.registry.listBasins",
+        "type": "xrpc"
+      }
+    },
+    {
+      "steps": [
+        {
+          "args": {
+            "sql": "MATCH (f:OilField {country_code: $input.countryCode}) RETURN f.field_code AS fieldCode, f.production_bpd AS production, f.status AS status LIMIT 50"
+          },
+          "fn": "graph.query",
+          "id": "pressure"
+        }
+      ],
+      "trigger": {
+        "nsid": "com.etzhayyim.apps.oilUpstream.analytics.getProductionPressure",
+        "type": "xrpc"
+      }
+    },
+    {
+      "steps": [
+        {
+          "args": {
+            "sql": "MATCH (f:OilField) RETURN count(f) AS fields LIMIT 1"
+          },
+          "fn": "graph.query",
+          "id": "stats"
+        }
+      ],
+      "trigger": {
+        "nsid": "com.etzhayyim.apps.oilUpstream.health",
+        "type": "xrpc"
+      }
+    },
+    {
+      "steps": [
+        {
+          "args": {
+            "sql": "MATCH (n) WHERE n.repo = $did RETURN count(n) AS nodeCount, coalesce(max(n._seq), 0) AS latestSeq LIMIT 1"
+          },
+          "fn": "graph.query",
+          "id": "coverageNodes"
+        },
+        {
+          "args": {
+            "sql": "MATCH (n) WHERE n.repo = $did AND n.collection IS NOT NULL RETURN n.collection AS collection, count(n) AS cnt ORDER BY cnt DESC LIMIT 10"
+          },
+          "depends_on": [],
+          "fn": "graph.query",
+          "id": "coverageCollections"
+        },
+        {
+          "args": {
+            "params": {
+              "actorName": "oil-upstream",
+              "bucket": "6h",
+              "collection": "com.etzhayyim.apps.oilUpstream.coverageSnapshot",
+              "latestSeq": 0,
+              "nanoid": "01lupstr",
+              "nodeCount": "$coverageNodes.rows[0].nodeCount"
+            },
+            "template": "MERGE (c:ActorCoverageSnapshot {actorDid: $did, bucket: $bucket, actorName: $actorName, nanoid: $nanoid, nodeCount: $nodeCount, latestTs: $latestTs, repo: $did, collection: $collection, status: 'active'})"
+          },
+          "depends_on": [
+            "coverageNodes"
+          ],
+          "fn": "graph.write",
+          "id": "coverageSnapshot"
+        }
+      ],
+      "trigger": {
+        "cron": "0 */6 * * *",
+        "type": "cron"
+      }
+    }
+  ],
+  "profile": {
+    "agentType": "autonomous",
+    "capabilities": [
+      "basin-registry",
+      "field-registry",
+      "operator-mapping",
+      "production-pressure-analysis",
+      "reserve-monitoring"
+    ],
+    "description": "Tracks producing basins, fields, operators, reserves and production pressure. Connects upstream assets into export and refining systems.",
+    "displayName": "Oil Upstream Basin & Field Intelligence",
+    "isBot": true,
+    "operator": "etzhayyim.co.jp"
+  },
+  "requiredCollections": [
+    "com.etzhayyim.apps.standard.shinkaEvolution",
+    "com.etzhayyim.apps.standard.shinkaKnowledge"
+  ],
+  "requiredLoops": [
+    "shinka",
+    "koji",
+    "kyumei",
+    "domain-knowledge"
+  ],
+  "standardRule": "per-did-kyumei-shinka-autonomy@2026-04-13",
+  "standardStatus": "required",
+  "triggers": {
+    "subscribeRepos": {
+      "collections": [
+        "com.etzhayyim.apps.oilUpstream.basin",
+        "com.etzhayyim.apps.oilUpstream.field",
+        "com.etzhayyim.apps.oilUpstream.production",
+        "com.etzhayyim.apps.oilMidstream.flow",
+        "com.etzhayyim.apps.oilRefining.refinery"
+      ]
+    }
+  },
+  "uiType": "yoro"
+}
