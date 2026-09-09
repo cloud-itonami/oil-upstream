@@ -11,7 +11,7 @@
   on any runtime: the repo carried no test/, no deps.edn, no nbb.edn and no
   package.json. Every claim about its gate was true only by inspection."
   (:require [clojure.test :refer [deftest is testing]]
-            [kotoba.lang.text :as str]
+            [clojure.string :as str]
             [oil_upstream.murakumo :as m]))
 
 (def all-attested
